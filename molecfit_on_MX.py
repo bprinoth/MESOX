@@ -54,8 +54,9 @@ def write_file_to_molecfit(molecfit_folder,name,header,wave,spectrum,plot=False,
     
     return 0
 
+ # add your own paths here!
 dp = Path('data/2022-04-03/')
-molecfit_input_folder = Path('/data/bibi/Papers/SavingESPRESSO/input_files/2022-04-03')
+molecfit_input_folder = Path('/data/bibi/Papers/TRS/input_files/2022-04-03')
 instrument= 'MAROON-X'
 molecfit_prog_folder = Path('/usr/local/molecfit_1.5.9/bin')
 python_alias = 'python3'
@@ -102,8 +103,8 @@ for i in tqdm(range(27,28)):
             fxs.append(fx/trans)
             transs.append(trans)
 
-        ut.writefits(f'/data/bibi/Papers/SavingESPRESSO/data/2022-04-03/tellurics_wave_{i}.fits', np.asarray(waves))
-        ut.writefits(f'/data/bibi/Papers/SavingESPRESSO/data/2022-04-03/tellurics_order_{i}.fits', np.asarray(transs))
+        ut.writefits(f'/data/bibi/Papers/TRS/data/2022-04-03/tellurics_wave_{i}.fits', np.asarray(waves))
+        ut.writefits(f'/data/bibi/Papers/TRS/data/2022-04-03/tellurics_order_{i}.fits', np.asarray(transs))
 
 
 # plt.figure()
