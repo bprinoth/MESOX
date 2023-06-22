@@ -2,12 +2,12 @@
 
 # user working directory only important for REFLEX workflow and GUI
 # not used by molecfit itself.
-user_workdir: /data/bibi/Papers/SavingESPRESSO/input_files/2022-04-03_blue
+user_workdir: /data/bibi/Papers/TRS/input_files/2022-04-03_blue
 
 ## INPUT DATA
 
 # Data file name (path relative to the current directory or absolute path)
-filename: /data/bibi/Papers/SavingESPRESSO/input_files/2022-04-03_blue/MAROON-X.fits
+filename: /data/bibi/Papers/TRS/input_files/2022-04-03_blue/MAROON-X.fits
 
 # ASCII list of files to be corrected for telluric absorption using the
 # transmission curve derived from the input reference file (path of list and
@@ -36,7 +36,7 @@ vac_air: air
 
 # ASCII or FITS table for wavelength ranges in micron to be fitted
 # (path relative to the current directory or absolute path; default: "none")
-wrange_include: /data/bibi/Papers/SavingESPRESSO/input_files/2022-04-03_blue/wavelength_inclusion.dat
+wrange_include: /data/bibi/Papers/TRS/input_files/2022-04-03_blue/wavelength_inclusion.dat
 
 # ASCII or FITS table for wavelength ranges in micron to be excluded from the
 # fit (path relative to the current directory or absolute path; default: "none")
@@ -49,7 +49,7 @@ prange_exclude: none
 ## RESULTS
 
 # Directory for output files (path relative to the current directory or absolute path)
-output_dir: /data/bibi/Papers/SavingESPRESSO/input_files/2022-04-03_blue
+output_dir: /data/bibi/Papers/TRS/TRS/2022-04-03_blue
 
 # Name for output files
 # (supplemented by "_fit" or "_tac" as well as ".asc", ".atm", ".fits",
