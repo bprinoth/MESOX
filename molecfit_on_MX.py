@@ -10,105 +10,175 @@ import pdb
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import tayph.util as ut
+import pandas as pd
+from astropy.time import Time
+import glob
 
-def load_order(dp, nr=20, expnr=28):
-    """
-    dp: datapath to folder with orders and wavelength files
-    nr: order number that should be considered
-    """
+
+def create_s1d_pkl(outpath, file_list, fits_files, response_file):
     
-    # IMPORT HEADER INFORMATION FROM s1ds.pkl
-    with open(dp/'s1ds.pkl', 'rb') as f: 
-        s1dheaders, _,_ = pickle.load(f)
+    s1d_headers_blue, s1d_headers_red = [], []
+
+    for file, ff in tqdm.tqdm(zip(file_list, fits_files)):
         
-    
-    order = fits.getdata(dp/f'order_{nr}.fits')
-    wave = fits.getdata(dp/f'wave_{nr}.fits') * 10. # in Å in vac
-    #print(np.shape(order))
-    
-    order = order[expnr]
-    wave = wave[expnr]
-    
-    p = np.polyfit(wave, order, deg=6)
-    poly = np.polyval(p, wave) 
-    
-  
-    return s1dheaders[expnr], order / poly , wave
-   
-    
-def write_file_to_molecfit(molecfit_folder,name,header,wave,spectrum,plot=False, time_average=False):
-    spectrum[spectrum<=0]=np.nan
-    err = np.sqrt(spectrum)
-    
-    col1 = fits.Column(name = 'wavelength', format = '1D', array = wave)
-    col2 = fits.Column(name = 'flux', format       = '1D', array = spectrum)
-    col3 = fits.Column(name = 'err_flux', format   = '1D', array = err)
-    
-    cols = fits.ColDefs([col1, col2, col3])
-    tbhdu = fits.BinTableHDU.from_columns(cols)
-    prihdr = fits.Header()
-    prihdr = copy.deepcopy(header)
-    prihdu = fits.PrimaryHDU(header=prihdr)
-    thdulist = fits.HDUList([prihdu, tbhdu])
-    thdulist.writeto(molecfit_folder/name,overwrite=True)
-    
+        store = pd.HDFStore(file, 'r+')
+
+        # Read content from hdf data store
+        spec_blue   = store['spec_blue']
+        spec_red    = store['spec_red']
+        store.close()
+
+        # read the response function
+        store = pd.HDFStore(response_file, 'r+')
+        response_blue = dict(store['response_blue'])
+        response_red = dict(store['response_red'])
+        store.close()
+        
+
+        orders_blue = spec_blue.index.levels[1]
+        orders_blue = orders_blue.drop(91)
+        orders_red = spec_red.index.levels[1]
+        orders_blue = orders_blue[::-1]
+        orders_red = orders_red[::-1]
+
+        header = fits.getheader(ff)
+        zpt = Time(header["HIERARCH MAROONX TELESCOPE UTCDATE"]+'T00:00:00.000', format='isot', scale='utc')
+        obs = Time(header["HIERARCH MAROONX TELESCOPE UTCDATE"]+'T'+header["HIERARCH MAROONX TELESCOPE UTC"], 
+            format='isot', scale='utc')
+
+        header["HIERARCH MAROONX TELESCOPE TIME"] = (abs(zpt-obs)).to_value('sec')
+        #print(type(header['HIERARCH MAROONX TELESCOPE MJD']))
+        header['HIERARCH MAROONX TELESCOPE MJD'] = float(header['HIERARCH MAROONX TELESCOPE MJD'])
+        #print(type(header['HIERARCH MAROONX TELESCOPE MJD']))
+        
+        if 'b_0340' in ff:
+            # blue orders
+            s1d_headers_blue.append(header)
+
+        elif 'r_0300' in ff:
+            # red orders
+            s1d_headers_red.append(header)
+        else:
+            print("I don't know what to do with this... not appending anything.")
+            print("something is wrong, I will pdb you out of this...")
+            pdb.set_trace()
+
+        # Now we stich the s1d spectra together:
+
+        # first for red
+        s1d_flux_stitched_red = []
+        s1d_wl_stitched_red = []
+        for k in range(len(orders_red)-1):
+            o = orders_red[k]
+            p = orders_red[k+1]
+            flux_larger_order = spec_red['optimal_extraction'][6][p] / response_red[p]
+            wl_larger_order = spec_red['wavelengths'][6][p]
+
+            if k==0:
+                wl_smaller_order =spec_red['wavelengths'][6][o]
+                flux_smaller_order = spec_red['optimal_extraction'][6][o] / response_red[o]
+            else: 
+                wl_smaller_order = np.asarray(s1d_wl_stitched_red)
+                flux_smaller_order = np.asarray(s1d_flux_stitched_red)
+            
+            # find the overlap reagion in the smaller and larger order:
+            wl_overlap_in_smaller_order = wl_smaller_order[wl_smaller_order > np.min(wl_larger_order)]
+            wl_overlap_in_larger_order = wl_larger_order[wl_larger_order < np.max(wl_smaller_order)]
+            flux_overlap_in_smaller_order = flux_smaller_order[wl_smaller_order > np.min(wl_larger_order)]
+            flux_overlap_in_larger_order = flux_larger_order[wl_larger_order <  np.max(wl_smaller_order)]
+
+            # Now interpolate the flux of the larger order in the overlap region onto the wl axis
+            # of the overlap region in the smaller order. 
+            #pdb.set_trace()
+            inp_flux_overlap_region_larger_order = sc.interpolate.interp1d(
+                wl_overlap_in_larger_order, flux_overlap_in_larger_order, fill_value='extrapolate', bounds_error=False)(wl_overlap_in_smaller_order)
+
+            mean_flux_overlap_region = 0.5 * (inp_flux_overlap_region_larger_order + flux_overlap_in_smaller_order)
+            wl_concatenated = np.concatenate((wl_smaller_order, wl_larger_order[wl_larger_order> np.max(wl_smaller_order)]))
+            flux_concatenated = np.concatenate((    flux_smaller_order[wl_smaller_order < np.min(wl_larger_order)],
+                                                    mean_flux_overlap_region,
+                                                    flux_larger_order[wl_larger_order > np.max(wl_smaller_order)])
+            )
+
+
+            s1d_wl_stitched_red = wl_concatenated
+            s1d_flux_stitched_red= flux_concatenated
+            
+        # and for blue
+        s1d_flux_stitched_blue = []
+        s1d_wl_stitched_blue = []
+        for k in range(len(orders_blue)-1):
+            o = orders_blue[k]
+            p = orders_blue[k+1]
+            flux_larger_order = spec_blue['optimal_extraction'][6][p] / response_blue[p]
+            wl_larger_order = spec_blue['wavelengths'][6][p]
+
+            if k==0:
+                wl_smaller_order =spec_blue['wavelengths'][6][o]
+                flux_smaller_order = spec_blue['optimal_extraction'][6][o] / response_blue[o]
+            else: 
+                wl_smaller_order = np.asarray(s1d_wl_stitched_blue)
+                flux_smaller_order = np.asarray(s1d_flux_stitched_blue)
+            
+            # find the overlap reagion in the smaller and larger order:
+            wl_overlap_in_smaller_order = wl_smaller_order[wl_smaller_order > np.min(wl_larger_order)]
+            wl_overlap_in_larger_order = wl_larger_order[wl_larger_order < np.max(wl_smaller_order)]
+            flux_overlap_in_smaller_order = flux_smaller_order[wl_smaller_order > np.min(wl_larger_order)]
+            flux_overlap_in_larger_order = flux_larger_order[wl_larger_order <  np.max(wl_smaller_order)]
+
+            # Now interpolate the flux of the larger order in the overlap region onto the wl axis
+            # of the overlap region in the smaller order. 
+            #pdb.set_trace()
+            inp_flux_overlap_region_larger_order = sc.interpolate.interp1d(
+                wl_overlap_in_larger_order, flux_overlap_in_larger_order, fill_value='extrapolate', bounds_error=False)(wl_overlap_in_smaller_order)
+
+            mean_flux_overlap_region = 0.5*(inp_flux_overlap_region_larger_order + flux_overlap_in_smaller_order)
+            wl_concatenated = np.concatenate((wl_smaller_order, wl_larger_order[wl_larger_order> np.max(wl_smaller_order)]))
+            flux_concatenated = np.concatenate((    flux_smaller_order[wl_smaller_order < np.min(wl_larger_order)],
+                                                    mean_flux_overlap_region,
+                                                    flux_larger_order[wl_larger_order > np.max(wl_smaller_order)])
+            )
+
+
+            s1d_wl_stitched_blue = wl_concatenated
+            s1d_flux_stitched_blue= flux_concatenated
+        
+
+        # now let's write this stuff into pickle file for blue and red
+
+        with open(f'{outpath}_red/s1ds.pkl', 'wb') as f: 
+            pickle.dump([s1d_headers_red,s1d_flux_stitched_red,s1d_wl_stitched_red],f)
+
+        f.close()
+
+        with open(f'{outpath}_blue/s1ds.pkl', 'wb') as f: 
+            pickle.dump([s1d_headers_blue,s1d_flux_stitched_blue,s1d_wl_stitched_blue],f)
+
+        f.close()
+
+
     return 0
 
- # add your own paths here!
-dp = Path('data/2022-04-03/')
-molecfit_input_folder = Path('/data/bibi/Papers/TRS/input_files/2022-04-03')
-instrument= 'MAROON-X'
-molecfit_prog_folder = Path('/usr/local/molecfit_1.5.9/bin')
-python_alias = 'python3'
-parname = Path('MAROON-X.par')
-parfile = molecfit_input_folder/parname
-
-orders_to_look_at = [27]
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 
-for i in tqdm(range(27,28)):
-
-    #print(f'ORDER {i}')
-    waves, fxs, transs = [],[],[]
-    if i in orders_to_look_at:
-       
-        # LOAD IN ORDER i, expnr
-
-        header, spectrum, wave = load_order(dp, i)
-        
-        
-        write_file_to_molecfit(molecfit_input_folder,instrument+'.fits',header,wave,spectrum)
-        tel.execute_molecfit(molecfit_prog_folder,parfile,molecfit_input_folder,gui=True,
-            alias=python_alias)
-
-        for k in range(57):
-            header, spectrum, wave = load_order(dp, i, expnr=k)    
-            write_file_to_molecfit(molecfit_input_folder,instrument+'.fits',header,wave,spectrum)
-
-            tel.execute_molecfit(molecfit_prog_folder,parfile,molecfit_input_folder,gui=False,
-                alias=python_alias)
-            wl,fx,trans = tel.retrieve_output_molecfit(molecfit_input_folder/instrument)
-
-            waves.append(wl)
-            fxs.append(fx/trans)
-            transs.append(trans)
-    else:
-        for k in range(57):
-            header, spectrum, wave = load_order(dp, i, expnr=k)
-            wl = wave
-            fx = spectrum
-            trans = np.ones_like(spectrum)
-
-            waves.append(wl)
-            fxs.append(fx/trans)
-            transs.append(trans)
-
-        ut.writefits(f'/data/bibi/Papers/TRS/data/2022-04-03/tellurics_wave_{i}.fits', np.asarray(waves))
-        ut.writefits(f'/data/bibi/Papers/TRS/data/2022-04-03/tellurics_order_{i}.fits', np.asarray(transs))
+# TASK 1: renaming header keywords + creating stitched spectrum
 
 
-# plt.figure()
-# for m in range(len(transs)):
-#     plt.plot(waves[m], transs[m])
 
-# plt.show()
+path_to_raw_fits_files = Path('20220403/')
+outpath = '/home/bibi/Papers/TRS/data/2022-04-03'
+file_list = sorted(glob.glob(path+'*.hd5'))
+fits_files = sorted(glob.glob(path+'*.fits'))
+response_file = 'MAROON-X_PHOENIX_RESPONSE_CORRECTORDERS.hd5'
+
+create_s1d_pkl(
+    outpath=outpath,
+    file_list=file_list,
+    fits_files=fits_files,
+    response_file=response_file
+)
+
+
+# This is it! Your s1d file is created and you can go back to tayph and run molecfit on it.
+# Have fun!
